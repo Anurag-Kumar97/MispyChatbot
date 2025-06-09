@@ -1,7 +1,5 @@
 import { useState, useRef, useEffect } from "react";
 import axios from "axios";
-import img from "../public/bg.png";
-import logo from "../public/Logo.png";
 import "./App.css";
 import SendIcon from "@mui/icons-material/Send";
 
@@ -15,6 +13,7 @@ const App = () => {
   const [recognitionError, setRecognitionError] = useState(null);
   const [isSpeechSupported, setIsSpeechSupported] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const hasFetchedWelcome = useRef(false); // Add flag to track welcome fetch
 
   const audioRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -24,7 +23,6 @@ const App = () => {
     const handleResize = () => {
       setIsMobile(window.innerWidth <= 768);
     };
-
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
@@ -54,7 +52,6 @@ const App = () => {
 
         const SpeechRecognition = window.webkitSpeechRecognition;
         recognitionRef.current = new SpeechRecognition();
-
         recognitionRef.current.continuous = false;
         recognitionRef.current.interimResults = false;
         recognitionRef.current.lang = "en-US";
@@ -79,6 +76,12 @@ const App = () => {
 
     initSpeechRecognition();
 
+    // Only fetch welcome message if not already fetched
+    if (!hasFetchedWelcome.current) {
+      hasFetchedWelcome.current = true;
+      fetchWelcomeMessage();
+    }
+
     return () => {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
@@ -90,6 +93,21 @@ const App = () => {
   useEffect(() => {
     conversationEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [conversation]);
+
+  const fetchWelcomeMessage = async () => {
+    try {
+      const response = await axios.get("http://localhost:8000/welcome", {
+        timeout: 30000,
+      });
+      if (response.data?.response && response.data?.audio_url) {
+        addMessage("ai", response.data.response, response.data.audio_url);
+        playAudio(response.data.audio_url);
+      }
+    } catch (error) {
+      console.error("Error fetching welcome message:", error);
+      addMessage("error", `Failed to load welcome message: ${error.message}`);
+    }
+  };
 
   const cleanupAudio = () => {
     if (audioRef.current) {
@@ -105,9 +123,13 @@ const App = () => {
     cleanupAudio();
   };
 
-  const handleAudioError = () => {
+  const handleAudioError = (error) => {
     cleanupAudio();
-    addMessage("error", "Error playing audio response.");
+    const errorMessage = error?.message
+      ? `Error playing audio: ${error.message}`
+      : "Error playing audio response. Check if the audio file is accessible.";
+    addMessage("error", errorMessage);
+    console.error("Audio error details:", error);
   };
 
   const handleRecognitionError = (error) => {
@@ -117,7 +139,6 @@ const App = () => {
     setIsLoading(false);
 
     let errorMessage = "Speech recognition failed";
-
     switch (error) {
       case "audio-capture":
         errorMessage = "Microphone not found or access denied.";
@@ -131,9 +152,8 @@ const App = () => {
         errorMessage = "No speech detected.";
         break;
       default:
-        errorMessage = `Error: ${error}`;
+        errorMessage = `Speech recognition error: ${error}`;
     }
-
     addMessage("error", errorMessage);
   };
 
@@ -183,18 +203,19 @@ const App = () => {
         }
       );
 
-      if (response.data?.response) {
+      if (response.data?.response && response.data?.audio_url) {
         addMessage("user", text);
         addMessage("ai", response.data.response, response.data.audio_url);
-
-        if (response.data.audio_url && !isPlaying) {
-          playAudio(response.data.audio_url);
-        }
+        playAudio(response.data.audio_url);
       } else {
         throw new Error("Invalid response format");
       }
     } catch (error) {
-      addMessage("error", "Failed to get response from server");
+      console.error("Error sending text to backend:", error);
+      addMessage(
+        "error",
+        `Failed to get response from server: ${error.message}`
+      );
     } finally {
       setIsLoading(false);
     }
@@ -218,7 +239,7 @@ const App = () => {
     ]);
   };
 
-  const playAudio = (audioUrl) => {
+  const playAudio = async (audioUrl) => {
     if (!audioUrl || isPlaying) return;
 
     cleanupAudio();
@@ -226,16 +247,21 @@ const App = () => {
     const fullUrl = audioUrl.startsWith("http")
       ? audioUrl
       : `http://localhost:8000${audioUrl}`;
-    audioRef.current = new Audio(fullUrl);
-    setIsPlaying(true);
+    console.log("Attempting to play audio:", fullUrl);
 
-    audioRef.current.addEventListener("ended", handleAudioEnd);
-    audioRef.current.addEventListener("error", handleAudioError);
+    try {
+      await axios.head(fullUrl, { timeout: 5000 });
+      audioRef.current = new Audio(fullUrl);
+      setIsPlaying(true);
 
-    audioRef.current.play().catch((err) => {
-      console.error("Audio play error:", err);
-      handleAudioError();
-    });
+      audioRef.current.addEventListener("ended", handleAudioEnd);
+      audioRef.current.addEventListener("error", (e) => handleAudioError(e));
+
+      await audioRef.current.play();
+    } catch (err) {
+      console.error("Audio playback error:", err);
+      handleAudioError(err);
+    }
   };
 
   const clearConversation = () => {
@@ -250,217 +276,59 @@ const App = () => {
     }
   };
 
-  const styles = {
-    container: {
-      backgroundColor: "#010315",
-      backgroundImage: `url(${img})`,
-      backgroundSize: "cover",
-      backgroundPosition: "center",
-      boxSizing: "border-box",
-      backgroundRepeat: "no-repeat",
-      minHeight: "100vh",
-      minWidth: "100vw",
-      padding: isMobile ? "10px" : "20px",
-      color: "white",
-      display: "flex",
-      flexDirection: "column",
-      justifyContent: "flex-start",
-      fontFamily: "Segoe UI, Tahoma, Geneva, Verdana, sans-serif",
-      position: "relative",
-    },
-    header: {
-      textAlign: "center",
-      marginBottom: isMobile ? "10px" : "20px",
-      marginTop: isMobile ? "40px" : "0",
-    },
-    conversationContainer: {
-      width: "100%",
-      display: "flex",
-      justifyContent: "center",
-      height: isMobile ? "calc(100vh - 250px)" : "56vh",
-      marginBottom: isMobile ? "80px" : "10%",
-    },
-    conversation: {
-      flex: 1,
-      overflowY: "auto",
-      padding: isMobile ? "10px" : "15px",
-      backgroundColor: "rgba(0, 0, 0, 0.2)",
-      borderRadius: "8px",
-      maxHeight: isMobile ? "80%" : "56vh",
-      maxWidth: isMobile ? "85%" : "50%",
-      border: "0.5px solid white",
-      scrollbarWidth: "thin",
-      scrollbarColor: "#4a90e2 rgba(0,0,0,0.1)",
-    },
-    message: {
-      marginBottom: "15px",
-      padding: "10px 15px",
-      borderRadius: "18px",
-      maxWidth: "80%",
-      lineHeight: "1.4",
-      wordBreak: "break-word",
-      fontSize: isMobile ? "14px" : "16px",
-    },
-    userMessage: {
-      background: "linear-gradient(135deg, #D098B5, #2F0BA4)",
-      marginLeft: "auto",
-      color: "white",
-      border: "0.5px solid #70728D",
-    },
-    aiMessage: {
-      background: "linear-gradient(135deg, #02747C, #011516)",
-      marginRight: "auto",
-      color: "white",
-      border: "0.5px solid #70728D",
-    },
-    errorMessage: {
-      backgroundColor: "#ffebee",
-      color: "#c62828",
-      textAlign: "center",
-      padding: "10px",
-      borderRadius: "5px",
-      margin: "0 auto",
-      maxWidth: "90%",
-    },
-    inputContainer: {
-      display: "flex",
-      gap: "10px",
-      marginBottom: isMobile ? "5px" : "15px",
-      justifyContent: "center",
-      width: isMobile ? "95%" : "60%",
-      position: "fixed",
-      bottom: isMobile ? "70px" : "20px",
-      left: "50%",
-      transform: "translateX(-50%)",
-    },
-    button: {
-      padding: isMobile ? "8px 15px" : "12px 20px",
-      borderRadius: "20px",
-      border: "none",
-      backgroundColor: "#4a90e2",
-      color: "white",
-      fontSize: isMobile ? "14px" : "16px",
-      cursor: "pointer",
-      whiteSpace: "nowrap",
-    },
-    buttonGroup: {
-      display: "flex",
-      gap: "10px",
-      justifyContent: "center",
-      position: "fixed",
-      bottom: isMobile ? "10px" : "10%",
-      left: "50%",
-      transform: "translateX(-50%)",
-      width: isMobile ? "95%" : "auto",
-    },
-    logoContainer: {
-      position: "absolute",
-      top: isMobile ? "5px" : "20px",
-      left: isMobile ? "5px" : "20px",
-      display: "flex",
-      alignItems: "center",
-      gap: "10px",
-    },
-    logoImage: {
-      height: isMobile ? "80px" : "250px",
-      width: "auto",
-    },
-    inputWrapper: {
-      position: "relative",
-      flex: 1,
-      display: "flex",
-      alignItems: "center",
-    },
-    textInput: {
-      width: "100%",
-      padding: isMobile ? "10px 40px 10px 15px" : "12px 45px 12px 15px",
-      borderRadius: "20px",
-      border: "1px solid #ddd",
-      fontSize: isMobile ? "14px" : "16px",
-      outline: "none",
-      backgroundColor: "rgba(255,255,255,0.05)",
-      color: "white",
-    },
-    sendIconButton: {
-      position: "absolute",
-      right: "10px",
-      background: "none",
-      border: "none",
-      cursor: "pointer",
-      fontSize: isMobile ? "18px" : "20px",
-      color: "white",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      height: "100%",
-    },
-    emptyState: {
-      textAlign: "center",
-      color: "#ccc",
-      marginTop: "20px",
-      fontSize: isMobile ? "14px" : "16px",
-    },
-    loadingText: {
-      textAlign: "center",
-      fontSize: isMobile ? "14px" : "16px",
-    },
-  };
-
   return (
-    <div style={styles.container}>
-      <div style={styles.logoContainer}>
-        <img src={logo} alt="Logo" style={styles.logoImage} />
+    <div
+      className="container"
+      style={{ backgroundImage: `url('images/bg.png')` }}
+    >
+      <div className="logoContainer">
+        <img src={"images/Logo.png"} alt="Logo" className="logoImage" />
       </div>
-      <div style={styles.header}>
-        <h1 style={{ fontSize: isMobile ? "20px" : "28px" }}>
-          Welcome to your BotBuddy
-        </h1>
-        <p style={{ fontSize: isMobile ? "14px" : "16px" }}>
-          smart conversations better insights
-        </p>
+      <div className="header">
+        <h1>Welcome to your BotBuddy</h1>
+        <p>smart conversations better insights</p>
       </div>
 
-      <div style={styles.conversationContainer}>
-        <div style={styles.conversation}>
+      <div className="conversationContainer">
+        <div className="conversation">
           {conversation.length === 0 ? (
-            <p style={styles.emptyState}></p>
+            <p className="emptyState">Start a conversation!</p>
           ) : (
             conversation.map((msg, index) => (
               <div
                 key={index}
-                style={{
-                  ...styles.message,
-                  ...(msg.speaker === "user"
-                    ? styles.userMessage
+                className={`message ${
+                  msg.speaker === "user"
+                    ? "userMessage"
                     : msg.speaker === "ai"
-                    ? styles.aiMessage
-                    : styles.errorMessage),
-                }}
+                    ? "aiMessage"
+                    : "errorMessage"
+                }`}
               >
                 <p>{msg.text}</p>
               </div>
             ))
           )}
-          {isLoading && <p style={styles.loadingText}>Processing...</p>}
+          {isLoading && <p className="loadingText">Processing...</p>}
           <div ref={conversationEndRef} />
         </div>
       </div>
 
-      <div style={styles.inputContainer}>
-        <div style={styles.inputWrapper}>
+      <div className="inputContainer">
+        <div className="inputWrapper">
           <input
             type="text"
             value={textQuery}
             onChange={(e) => setTextQuery(e.target.value)}
             onKeyPress={handleKeyPress}
             placeholder="Type your message here..."
-            style={styles.textInput}
+            className="textInput"
             disabled={isLoading || isListening}
           />
           <button
             onClick={handleSendText}
             disabled={isLoading || !textQuery.trim()}
-            style={styles.sendIconButton}
+            className="sendIconButton"
             title="Send"
           >
             <SendIcon />
@@ -468,24 +336,31 @@ const App = () => {
         </div>
       </div>
 
-      <div style={styles.buttonGroup}>
+      <div className="buttonGroup">
         <button
           onClick={isListening ? stopRecording : startRecording}
           disabled={
             isPlaying || isLoading || !isSpeechSupported || permissionDenied
           }
-          style={styles.button}
+          className="button"
         >
           {isListening ? "🛑 Stop" : "🎤 Let's Talk"}
         </button>
         <button
           onClick={clearConversation}
           disabled={isLoading}
-          style={{ ...styles.button, backgroundColor: "#7f8c8d" }}
+          className="button"
+          style={{ backgroundColor: "#7f8c8d" }}
         >
           Start Fresh
         </button>
       </div>
+
+      {recognitionError && (
+        <div className="errorContainer">
+          <p>Error: {recognitionError}</p>
+        </div>
+      )}
     </div>
   );
 };
